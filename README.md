@@ -67,9 +67,27 @@ $ printf '123 Main St\nNowhere, ZZ 00000\n' | ./target/release/address-tool --js
 
 That's deliberately narrow. See the roadmap below for what's missing.
 
+## Suffix normalization
+
+Street lines get their suffix words rewritten to the canonical USPS
+Publication 28 abbreviation, so "Street", "Str", and "St" all come out
+as "St" (same for Avenue/Ave, Boulevard/Blvd, and so on for the common
+ones). This runs word by word, so it catches a suffix in the middle of
+a line too:
+
+```
+$ printf '100 Main Street Suite 4\nSpringfield, IL 62704\n' | ./target/release/address-tool
+100 Main St Suite 4
+Springfield, IL 62704
+```
+
+It only knows a few dozen suffix variants, not the full USPS table, and
+it can't tell "St" the abbreviation from "St" the word (as in "St
+Charles Ave") — since both cases already read "St" either way, that
+particular ambiguity happens to be harmless.
+
 ## Status
 
 Early skeleton. The parser only handles the single-format US case
-described above — no international addresses, no fuzzy matching, no
-normalization of things like "St" vs "Street". Zero dependencies by
-design; everything here is standard library only.
+described above — no international addresses, no fuzzy matching. Zero
+dependencies by design; everything here is standard library only.

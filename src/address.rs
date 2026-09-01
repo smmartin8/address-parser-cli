@@ -108,11 +108,61 @@ pub fn parse(input: &str) -> Result<Address, ParseError> {
     }
 
     Ok(Address {
-        street_lines: street_lines.iter().map(|s| s.to_string()).collect(),
+        street_lines: street_lines.iter().map(|s| normalize_street_line(s)).collect(),
         city: city.to_string(),
         state: state_upper,
         zip: zip.to_string(),
     })
+}
+
+/// USPS Publication 28 street suffix abbreviations, keyed by every spelling
+/// variant (full word or common alternate abbreviation) that should map to
+/// it. Lookup is case-insensitive.
+const STREET_SUFFIXES: &[(&str, &str)] = &[
+    ("street", "St"), ("str", "St"), ("strt", "St"), ("st", "St"),
+    ("avenue", "Ave"), ("aven", "Ave"), ("avn", "Ave"), ("av", "Ave"), ("ave", "Ave"),
+    ("boulevard", "Blvd"), ("boul", "Blvd"), ("boulv", "Blvd"), ("blvd", "Blvd"),
+    ("drive", "Dr"), ("driv", "Dr"), ("drv", "Dr"), ("dr", "Dr"),
+    ("court", "Ct"), ("crt", "Ct"), ("ct", "Ct"),
+    ("lane", "Ln"), ("ln", "Ln"),
+    ("road", "Rd"), ("rd", "Rd"),
+    ("place", "Pl"), ("pl", "Pl"),
+    ("terrace", "Ter"), ("terr", "Ter"), ("ter", "Ter"),
+    ("circle", "Cir"), ("circ", "Cir"), ("crcl", "Cir"), ("cir", "Cir"),
+    ("way", "Way"), ("wy", "Way"),
+    ("parkway", "Pkwy"), ("pkwy", "Pkwy"), ("pky", "Pkwy"),
+    ("highway", "Hwy"), ("hwy", "Hwy"), ("hiwy", "Hwy"),
+    ("trail", "Trl"), ("trl", "Trl"),
+    ("square", "Sq"), ("sq", "Sq"),
+    ("loop", "Loop"), ("lp", "Loop"),
+    ("alley", "Aly"), ("aly", "Aly"),
+    ("crossing", "Xing"), ("xing", "Xing"),
+    ("extension", "Ext"), ("ext", "Ext"),
+    ("junction", "Jct"), ("jct", "Jct"),
+    ("turnpike", "Tpke"), ("tpke", "Tpke"),
+    ("point", "Pt"), ("pt", "Pt"),
+    ("ridge", "Rdg"), ("rdg", "Rdg"),
+];
+
+/// Rewrites recognizable street suffix words to their canonical USPS
+/// abbreviation, word by word, so it works whether the suffix sits mid-line
+/// ("100 Main Street Suite 4") or at the end ("100 Main Street"). Spacing
+/// and punctuation attached to the word (a trailing comma, say) are kept.
+fn normalize_street_line(line: &str) -> String {
+    line.split(' ')
+        .map(normalize_suffix_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_suffix_word(word: &str) -> String {
+    let trimmed = word.trim_end_matches(|c: char| c == ',' || c == '.');
+    let trailing = &word[trimmed.len()..];
+    let lower = trimmed.to_lowercase();
+    match STREET_SUFFIXES.iter().find(|(variant, _)| *variant == lower) {
+        Some((_, canonical)) => format!("{canonical}{trailing}"),
+        None => word.to_string(),
+    }
 }
 
 fn is_valid_zip(zip: &str) -> bool {
@@ -215,5 +265,35 @@ mod tests {
     fn rejects_missing_city_line() {
         let err = parse("123 Main St").unwrap_err();
         assert_eq!(err, ParseError::MissingCityStateZip);
+    }
+
+    #[test]
+    fn normalizes_full_suffix_to_abbreviation() {
+        let addr = parse("123 Main Street\nSpringfield, IL 62704").unwrap();
+        assert_eq!(addr.street_lines, vec!["123 Main St"]);
+    }
+
+    #[test]
+    fn normalizes_suffix_mid_line() {
+        let addr = parse("100 Main Street Suite 4\nSpringfield, IL 62704").unwrap();
+        assert_eq!(addr.street_lines, vec!["100 Main St Suite 4"]);
+    }
+
+    #[test]
+    fn leaves_already_abbreviated_suffix_alone() {
+        let addr = parse("1 Infinite Loop\nCupertino, CA 95014").unwrap();
+        assert_eq!(addr.street_lines, vec!["1 Infinite Loop"]);
+    }
+
+    #[test]
+    fn normalizes_suffix_case_insensitively_and_keeps_trailing_comma() {
+        let addr = parse("42 Wallaby avenue,\nSydney, NY 10001").unwrap();
+        assert_eq!(addr.street_lines, vec!["42 Wallaby Ave,"]);
+    }
+
+    #[test]
+    fn does_not_touch_unrelated_words() {
+        let addr = parse("500 Elm Boulevard\nApt 4B\nSpringfield, IL 62704").unwrap();
+        assert_eq!(addr.street_lines, vec!["500 Elm Blvd", "Apt 4B"]);
     }
 }
