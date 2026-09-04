@@ -67,6 +67,29 @@ $ printf '123 Main St\nNowhere, ZZ 00000\n' | ./target/release/address-tool --js
 
 That's deliberately narrow. See the roadmap below for what's missing.
 
+## Strict vs. lenient
+
+By default the tool is strict: the city/state/zip line must be exactly
+"City, ST ZIP" with the comma in place, and the zip must be full-length.
+Pass `--lenient` to recover from two common formatting slips instead of
+rejecting them:
+
+- A missing comma before the state ("Springfield IL 62704" is read the
+  same as "Springfield, IL 62704").
+- A zip that's lost a leading zero, which happens whenever a zip column
+  gets treated as a number somewhere upstream (spreadsheets are the
+  usual culprit) — "2101" is padded back out to "02101".
+
+Anything else — an unrecognized state code, a zip that isn't digits —
+is still rejected in both modes. Lenient recovers from sloppy
+formatting, not from actually invalid data.
+
+```
+$ printf '1 Main St\nBoston MA 2101\n' | ./target/release/address-tool --lenient
+1 Main St
+Boston, MA 02101
+```
+
 ## Suffix normalization
 
 Street lines get their suffix words rewritten to the canonical USPS
@@ -89,5 +112,6 @@ particular ambiguity happens to be harmless.
 ## Status
 
 Early skeleton. The parser only handles the single-format US case
-described above — no international addresses, no fuzzy matching. Zero
-dependencies by design; everything here is standard library only.
+described above — no international addresses, no parsing more than one
+address out of a single input. Zero dependencies by design; everything
+here is standard library only.

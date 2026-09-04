@@ -5,13 +5,18 @@ use std::process::ExitCode;
 
 mod address;
 
+use address::ValidationMode;
+
 fn main() -> ExitCode {
     let mut json_mode = false;
+    let mut mode = ValidationMode::Strict;
     let mut path: Option<String> = None;
 
     for arg in env::args().skip(1) {
         match arg.as_str() {
             "--json" => json_mode = true,
+            "--strict" => mode = ValidationMode::Strict,
+            "--lenient" => mode = ValidationMode::Lenient,
             "-h" | "--help" => {
                 print_usage();
                 return ExitCode::SUCCESS;
@@ -35,7 +40,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match address::parse(&input) {
+    match address::parse_with_mode(&input, mode) {
         Ok(addr) => {
             if json_mode {
                 println!("{}", addr.to_json());
@@ -67,9 +72,13 @@ fn read_input(path: Option<&str>) -> io::Result<String> {
 }
 
 fn print_usage() {
-    eprintln!("usage: address-tool [--json] [FILE]");
+    eprintln!("usage: address-tool [--json] [--strict|--lenient] [FILE]");
     eprintln!();
     eprintln!("Reads a US postal address (street line(s), then \"City, ST ZIP\")");
     eprintln!("from FILE, or from stdin if FILE is omitted, validates it, and");
     eprintln!("prints it back out in canonical form.");
+    eprintln!();
+    eprintln!("--strict (default) requires the exact \"City, ST ZIP\" shape.");
+    eprintln!("--lenient also accepts a missing comma before the state and a");
+    eprintln!("zip that's short a leading zero.");
 }

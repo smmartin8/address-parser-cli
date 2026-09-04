@@ -17,6 +17,17 @@ pub struct Address {
     pub zip: String,
 }
 
+/// Strict rejects anything that doesn't match the documented input shape
+/// exactly. Lenient accepts a couple of common real-world sloppiness cases
+/// (a missing comma before the state, a zip that lost a leading zero) that
+/// are unambiguous to recover from even though they're not well-formed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ValidationMode {
+    #[default]
+    Strict,
+    Lenient,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     Empty,
@@ -52,7 +63,19 @@ impl std::error::Error for ParseError {}
 ///
 /// The last non-blank line must be "City, ST ZIP" or "City, ST ZIP-XXXX".
 /// Everything above it is treated as street address lines.
+///
+/// Equivalent to `parse_with_mode(input, ValidationMode::Strict)`.
 pub fn parse(input: &str) -> Result<Address, ParseError> {
+    parse_with_mode(input, ValidationMode::Strict)
+}
+
+/// Same as [`parse`], but in [`ValidationMode::Lenient`] recovers from a
+/// couple of common formatting slips instead of rejecting them outright:
+/// a missing comma before the state (falls back to splitting the line on
+/// whitespace), and a zip that's short a leading zero (padded back to 5
+/// digits). Everything else — unknown state codes, garbage input — is
+/// still an error in both modes.
+pub fn parse_with_mode(input: &str, mode: ValidationMode) -> Result<Address, ParseError> {
     let lines: Vec<&str> = input
         .lines()
         .map(str::trim)
@@ -73,12 +96,42 @@ pub fn parse(input: &str) -> Result<Address, ParseError> {
         return Err(ParseError::MissingStreet);
     }
 
+    let (city, state, zip) = split_city_state_zip(last_line, mode)?;
+
+    let state_upper = state.to_uppercase();
+    if !US_STATES.contains(&state_upper.as_str()) {
+        return Err(ParseError::UnknownState(state.to_string()));
+    }
+
+    let zip = normalize_zip(zip, mode)
+        .ok_or_else(|| ParseError::InvalidZip(zip.to_string()))?;
+
+    Ok(Address {
+        street_lines: street_lines.iter().map(|s| normalize_street_line(s)).collect(),
+        city: city.to_string(),
+        state: state_upper,
+        zip,
+    })
+}
+
+/// Splits the city/state/zip line into its three parts. Strict requires the
+/// standard "City, ST ZIP" shape with a comma before the state. Lenient
+/// falls back to treating the last two whitespace-separated tokens as state
+/// and zip when there's no comma at all.
+fn split_city_state_zip<'a>(
+    last_line: &'a str,
+    mode: ValidationMode,
+) -> Result<(&'a str, &'a str, &'a str), ParseError> {
     // The city/state/zip line is expected as "City, ST ZIP" — split on the
     // last comma so multi-word city names ("Winston, Salem" is unusual but
     // "Salt Lake City, UT 84101" is not) still work.
-    let comma_pos = last_line
-        .rfind(',')
-        .ok_or_else(|| ParseError::MalformedCityStateZip(last_line.to_string()))?;
+    let comma_pos = match last_line.rfind(',') {
+        Some(pos) => pos,
+        None if mode == ValidationMode::Lenient => {
+            return split_city_state_zip_without_comma(last_line);
+        }
+        None => return Err(ParseError::MalformedCityStateZip(last_line.to_string())),
+    };
     let city_part = &last_line[..comma_pos];
     let rest = last_line[comma_pos + 1..].trim();
 
@@ -98,21 +151,61 @@ pub fn parse(input: &str) -> Result<Address, ParseError> {
         return Err(ParseError::MalformedCityStateZip(last_line.to_string()));
     }
 
-    let state_upper = state.to_uppercase();
-    if !US_STATES.contains(&state_upper.as_str()) {
-        return Err(ParseError::UnknownState(state.to_string()));
+    Ok((city, state, zip))
+}
+
+fn split_city_state_zip_without_comma(
+    last_line: &str,
+) -> Result<(&str, &str, &str), ParseError> {
+    // Without a comma to anchor on, take the state and zip as the last two
+    // whitespace tokens and everything before that as the city. This means
+    // internal multi-space runs in the city name get collapsed, but that's
+    // an acceptable tradeoff for a format that wasn't well-formed to begin
+    // with.
+    let zip_start = last_line
+        .rfind(char::is_whitespace)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let (before_zip, zip) = (&last_line[..zip_start], &last_line[zip_start..]);
+    let before_zip = before_zip.trim_end();
+
+    let last_city_end = before_zip.rfind(char::is_whitespace);
+    let (city, state) = match last_city_end {
+        Some(i) => (before_zip[..i].trim_end(), before_zip[i + 1..].trim()),
+        None => return Err(ParseError::MalformedCityStateZip(last_line.to_string())),
+    };
+
+    if city.is_empty() || state.is_empty() || zip.is_empty() {
+        return Err(ParseError::MalformedCityStateZip(last_line.to_string()));
     }
 
-    if !is_valid_zip(zip) {
-        return Err(ParseError::InvalidZip(zip.to_string()));
-    }
+    Ok((city, state, zip))
+}
 
-    Ok(Address {
-        street_lines: street_lines.iter().map(|s| normalize_street_line(s)).collect(),
-        city: city.to_string(),
-        state: state_upper,
-        zip: zip.to_string(),
-    })
+/// Validates a zip and, in lenient mode, repairs one common data-entry
+/// problem: a zip that lost a leading zero (e.g. a New England zip like
+/// "02101" round-tripped through a spreadsheet as the number 2101).
+fn normalize_zip(zip: &str, mode: ValidationMode) -> Option<String> {
+    if is_valid_zip(zip) {
+        return Some(zip.to_string());
+    }
+    if mode == ValidationMode::Lenient {
+        let (base, ext) = match zip.split_once('-') {
+            Some((base, ext)) => (base, Some(ext)),
+            None => (zip, None),
+        };
+        if !base.is_empty() && base.len() <= 5 && digits_only(base) {
+            let padded_base = format!("{base:0>5}");
+            let candidate = match ext {
+                Some(ext) => format!("{padded_base}-{ext}"),
+                None => padded_base,
+            };
+            if is_valid_zip(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// USPS Publication 28 street suffix abbreviations, keyed by every spelling
@@ -165,11 +258,11 @@ fn normalize_suffix_word(word: &str) -> String {
     }
 }
 
-fn is_valid_zip(zip: &str) -> bool {
-    fn digits_only(s: &str) -> bool {
-        !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
-    }
+fn digits_only(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
 
+fn is_valid_zip(zip: &str) -> bool {
     match zip.split_once('-') {
         Some((base, ext)) => base.len() == 5 && digits_only(base) && ext.len() == 4 && digits_only(ext),
         None => zip.len() == 5 && digits_only(zip),
@@ -295,5 +388,69 @@ mod tests {
     fn does_not_touch_unrelated_words() {
         let addr = parse("500 Elm Boulevard\nApt 4B\nSpringfield, IL 62704").unwrap();
         assert_eq!(addr.street_lines, vec!["500 Elm Blvd", "Apt 4B"]);
+    }
+
+    #[test]
+    fn strict_rejects_missing_comma() {
+        let err = parse_with_mode("1 Main St\nSpringfield IL 62704", ValidationMode::Strict)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ParseError::MalformedCityStateZip("Springfield IL 62704".to_string())
+        );
+    }
+
+    #[test]
+    fn lenient_recovers_missing_comma() {
+        let addr = parse_with_mode("1 Main St\nSpringfield IL 62704", ValidationMode::Lenient)
+            .unwrap();
+        assert_eq!(addr.city, "Springfield");
+        assert_eq!(addr.state, "IL");
+        assert_eq!(addr.zip, "62704");
+    }
+
+    #[test]
+    fn lenient_recovers_missing_comma_with_multi_word_city() {
+        let addr =
+            parse_with_mode("1 Main St\nSalt Lake City UT 84101", ValidationMode::Lenient)
+                .unwrap();
+        assert_eq!(addr.city, "Salt Lake City");
+        assert_eq!(addr.state, "UT");
+        assert_eq!(addr.zip, "84101");
+    }
+
+    #[test]
+    fn strict_rejects_short_zip() {
+        let err = parse_with_mode("1 Main St\nBoston, MA 2101", ValidationMode::Strict)
+            .unwrap_err();
+        assert_eq!(err, ParseError::InvalidZip("2101".to_string()));
+    }
+
+    #[test]
+    fn lenient_pads_short_zip_with_leading_zero() {
+        let addr = parse_with_mode("1 Main St\nBoston, MA 2101", ValidationMode::Lenient)
+            .unwrap();
+        assert_eq!(addr.zip, "02101");
+    }
+
+    #[test]
+    fn lenient_pads_short_zip_plus_four() {
+        let addr = parse_with_mode("1 Main St\nBoston, MA 2101-0001", ValidationMode::Lenient)
+            .unwrap();
+        assert_eq!(addr.zip, "02101-0001");
+    }
+
+    #[test]
+    fn lenient_still_rejects_unknown_state() {
+        let err = parse_with_mode("1 Main St\nSpringfield ZZ 62704", ValidationMode::Lenient)
+            .unwrap_err();
+        assert_eq!(err, ParseError::UnknownState("ZZ".to_string()));
+    }
+
+    #[test]
+    fn lenient_still_rejects_garbage_zip() {
+        let err = parse_with_mode("1 Main St\nBoston, MA abcde", ValidationMode::Lenient)
+            .unwrap_err();
+        assert_eq!(err, ParseError::InvalidZip("abcde".to_string()));
     }
 }
