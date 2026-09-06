@@ -69,6 +69,48 @@ pub fn parse(input: &str) -> Result<Address, ParseError> {
     parse_with_mode(input, ValidationMode::Strict)
 }
 
+/// Parses zero or more addresses from a single input, where each address is
+/// separated from the next by one or more blank lines. A single address with
+/// no blank line anywhere behaves exactly like [`parse`] would, wrapped in a
+/// one-element vec.
+///
+/// Equivalent to `parse_all_with_mode(input, ValidationMode::Strict)`.
+pub fn parse_all(input: &str) -> Vec<Result<Address, ParseError>> {
+    parse_all_with_mode(input, ValidationMode::Strict)
+}
+
+/// Same as [`parse_all`], but parses each address block with the given
+/// [`ValidationMode`]. One block failing to parse doesn't stop the rest —
+/// the caller gets a result per block, in input order, so a batch job can
+/// report which entries were bad instead of aborting on the first one.
+pub fn parse_all_with_mode(input: &str, mode: ValidationMode) -> Vec<Result<Address, ParseError>> {
+    split_into_blocks(input)
+        .into_iter()
+        .map(|block| parse_with_mode(&block, mode))
+        .collect()
+}
+
+/// Groups input lines into blocks of consecutive non-blank lines, treating
+/// one or more blank lines as a separator between addresses.
+fn split_into_blocks(input: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in input.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(current.join("\n"));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current.join("\n"));
+    }
+    blocks
+}
+
 /// Same as [`parse`], but in [`ValidationMode::Lenient`] recovers from a
 /// couple of common formatting slips instead of rejecting them outright:
 /// a missing comma before the state (falls back to splitting the line on
@@ -452,5 +494,56 @@ mod tests {
         let err = parse_with_mode("1 Main St\nBoston, MA abcde", ValidationMode::Lenient)
             .unwrap_err();
         assert_eq!(err, ParseError::InvalidZip("abcde".to_string()));
+    }
+
+    #[test]
+    fn parse_all_splits_on_blank_lines() {
+        let input = "123 Main St\nSpringfield, IL 62704\n\n1 Infinite Loop\nCupertino, CA 95014";
+        let results = parse_all(input);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap().city, "Springfield");
+        assert_eq!(results[1].as_ref().unwrap().city, "Cupertino");
+    }
+
+    #[test]
+    fn parse_all_treats_multiple_blank_lines_as_one_separator() {
+        let input = "123 Main St\nSpringfield, IL 62704\n\n\n\n1 Infinite Loop\nCupertino, CA 95014";
+        let results = parse_all(input);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn parse_all_single_address_matches_parse() {
+        let input = "123 Main St\nSpringfield, IL 62704";
+        let results = parse_all(input);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], parse(input));
+    }
+
+    #[test]
+    fn parse_all_empty_input_yields_no_blocks() {
+        assert_eq!(parse_all("").len(), 0);
+        assert_eq!(parse_all("\n\n\n").len(), 0);
+    }
+
+    #[test]
+    fn parse_all_reports_error_without_aborting_the_batch() {
+        let input = "123 Main St\nSpringfield, ZZ 62704\n\n1 Infinite Loop\nCupertino, CA 95014";
+        let results = parse_all(input);
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0],
+            Err(ParseError::UnknownState("ZZ".to_string()))
+        );
+        assert_eq!(results[1].as_ref().unwrap().city, "Cupertino");
+    }
+
+    #[test]
+    fn parse_all_with_mode_applies_mode_to_every_block() {
+        let input = "1 Main St\nSpringfield IL 62704\n\n1 Infinite Loop\nCupertino CA 95014";
+        let results = parse_all_with_mode(input, ValidationMode::Lenient);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap().city, "Springfield");
+        assert_eq!(results[1].as_ref().unwrap().city, "Cupertino");
     }
 }

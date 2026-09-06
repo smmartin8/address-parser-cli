@@ -109,9 +109,32 @@ it can't tell "St" the abbreviation from "St" the word (as in "St
 Charles Ave") — since both cases already read "St" either way, that
 particular ambiguity happens to be harmless.
 
+## Multiple addresses
+
+Pass `--multi` to parse more than one address out of a single input.
+Addresses are separated by one or more blank lines:
+
+```
+$ printf '123 Main St\nSpringfield, IL 62704\n\n1 Infinite Loop\nCupertino, CA 95014\n' \
+    | ./target/release/address-tool --multi
+123 Main St
+Springfield, IL 62704
+
+1 Infinite Loop
+Cupertino, CA 95014
+```
+
+Each block is parsed independently, so one bad address doesn't stop
+the rest. In text mode the good ones print as usual and each bad one is
+reported to stderr, tagged with its position ("address 2: ..."). In
+JSON mode you get a single array back with a result per address, in
+order, mixing success objects and `{"error": ...}` objects as needed —
+so a caller can zip the output back up with whatever it fed in. Either
+way, the process exits non-zero if anything in the batch failed to
+parse.
+
 ## Status
 
 Early skeleton. The parser only handles the single-format US case
-described above — no international addresses, no parsing more than one
-address out of a single input. Zero dependencies by design; everything
-here is standard library only.
+described above — no international addresses yet. Zero dependencies by
+design; everything here is standard library only.
