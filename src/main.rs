@@ -10,6 +10,7 @@ use address::{Address, ParseError, ValidationMode};
 fn main() -> ExitCode {
     let mut json_mode = false;
     let mut multi = false;
+    let mut zip5 = false;
     let mut mode = ValidationMode::Strict;
     let mut path: Option<String> = None;
 
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--json" => json_mode = true,
             "--multi" => multi = true,
+            "--zip5" => zip5 = true,
             "--strict" => mode = ValidationMode::Strict,
             "--lenient" => mode = ValidationMode::Lenient,
             "-h" | "--help" => {
@@ -43,10 +45,17 @@ fn main() -> ExitCode {
     };
 
     if multi {
-        let results = address::parse_all_with_mode(&input, mode);
+        let mut results = address::parse_all_with_mode(&input, mode);
         if results.is_empty() {
             eprintln!("no addresses found in input");
             return ExitCode::FAILURE;
+        }
+        if zip5 {
+            for result in &mut results {
+                if let Ok(addr) = result {
+                    addr.truncate_zip_to_five();
+                }
+            }
         }
         let all_ok = if json_mode {
             print_multi_json(&results)
@@ -57,7 +66,10 @@ fn main() -> ExitCode {
     }
 
     match address::parse_with_mode(&input, mode) {
-        Ok(addr) => {
+        Ok(mut addr) => {
+            if zip5 {
+                addr.truncate_zip_to_five();
+            }
             if json_mode {
                 println!("{}", addr.to_json());
             } else {
@@ -130,7 +142,7 @@ fn read_input(path: Option<&str>) -> io::Result<String> {
 }
 
 fn print_usage() {
-    eprintln!("usage: address-tool [--json] [--multi] [--strict|--lenient] [FILE]");
+    eprintln!("usage: address-tool [--json] [--multi] [--zip5] [--strict|--lenient] [FILE]");
     eprintln!();
     eprintln!("Reads a US postal address (street line(s), then \"City, ST ZIP\")");
     eprintln!("from FILE, or from stdin if FILE is omitted, validates it, and");
@@ -139,6 +151,10 @@ fn print_usage() {
     eprintln!("--strict (default) requires the exact \"City, ST ZIP\" shape.");
     eprintln!("--lenient also accepts a missing comma before the state and a");
     eprintln!("zip that's short a leading zero.");
+    eprintln!();
+    eprintln!("--zip5 drops the +4 extension from the zip before printing, so");
+    eprintln!("\"95014-2083\" comes out as \"95014\". Has no effect on a zip that");
+    eprintln!("was already 5 digits.");
     eprintln!();
     eprintln!("--multi treats the input as one or more addresses separated by");
     eprintln!("blank lines. Each is parsed independently; a bad one is reported");

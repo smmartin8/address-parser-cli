@@ -312,6 +312,14 @@ fn is_valid_zip(zip: &str) -> bool {
 }
 
 impl Address {
+    /// Drops the +4 extension, if any, leaving the base 5-digit zip. A
+    /// no-op for an address that was already 5 digits.
+    pub fn truncate_zip_to_five(&mut self) {
+        if let Some((base, _)) = self.zip.split_once('-') {
+            self.zip = base.to_string();
+        }
+    }
+
     /// Canonical human-readable rendering: one street line per line, state
     /// uppercased, city/state/zip collapsed onto a single trailing line.
     pub fn to_pretty(&self) -> String {
@@ -536,6 +544,20 @@ mod tests {
             Err(ParseError::UnknownState("ZZ".to_string()))
         );
         assert_eq!(results[1].as_ref().unwrap().city, "Cupertino");
+    }
+
+    #[test]
+    fn truncate_zip_to_five_drops_extension() {
+        let mut addr = parse("1 Infinite Loop\nCupertino, CA 95014-2083").unwrap();
+        addr.truncate_zip_to_five();
+        assert_eq!(addr.zip, "95014");
+    }
+
+    #[test]
+    fn truncate_zip_to_five_is_a_no_op_on_plain_zip() {
+        let mut addr = parse("123 Main St\nSpringfield, IL 62704").unwrap();
+        addr.truncate_zip_to_five();
+        assert_eq!(addr.zip, "62704");
     }
 
     #[test]

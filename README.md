@@ -109,6 +109,21 @@ it can't tell "St" the abbreviation from "St" the word (as in "St
 Charles Ave") — since both cases already read "St" either way, that
 particular ambiguity happens to be harmless.
 
+## Zip+4 normalization
+
+Some downstream systems only want the 5-digit zip and choke on the +4
+extension. Pass `--zip5` to drop it before printing:
+
+```
+$ printf '1 Infinite Loop\nCupertino, CA 95014-2083\n' | ./target/release/address-tool --zip5
+1 Infinite Loop
+Cupertino, CA 95014
+```
+
+It's a no-op on an address that was already 5 digits, and it applies
+after validation, so a malformed zip+4 is still rejected rather than
+silently truncated into something that happens to look valid.
+
 ## Multiple addresses
 
 Pass `--multi` to parse more than one address out of a single input.
