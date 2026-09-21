@@ -4,23 +4,51 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 mod address;
+mod international;
 
 use address::{Address, ParseError, ValidationMode};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Country {
+    Us,
+    Ca,
+}
 
 fn main() -> ExitCode {
     let mut json_mode = false;
     let mut multi = false;
     let mut zip5 = false;
     let mut mode = ValidationMode::Strict;
+    let mut country = Country::Us;
     let mut path: Option<String> = None;
 
-    for arg in env::args().skip(1) {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" => json_mode = true,
             "--multi" => multi = true,
             "--zip5" => zip5 = true,
             "--strict" => mode = ValidationMode::Strict,
             "--lenient" => mode = ValidationMode::Lenient,
+            "--country" => {
+                let value = match args.next() {
+                    Some(v) => v,
+                    None => {
+                        eprintln!("--country requires a value (us or ca)");
+                        print_usage();
+                        return ExitCode::FAILURE;
+                    }
+                };
+                country = match value.to_lowercase().as_str() {
+                    "us" => Country::Us,
+                    "ca" => Country::Ca,
+                    other => {
+                        eprintln!("unknown country: {other} (expected us or ca)");
+                        print_usage();
+                        return ExitCode::FAILURE;
+                    }
+                };
+            }
             "-h" | "--help" => {
                 print_usage();
                 return ExitCode::SUCCESS;
@@ -43,6 +71,31 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if country == Country::Ca {
+        if multi {
+            eprintln!("--multi is not yet supported for --country ca");
+            return ExitCode::FAILURE;
+        }
+        return match international::parse_ca(&input) {
+            Ok(addr) => {
+                if json_mode {
+                    println!("{}", addr.to_json());
+                } else {
+                    println!("{}", addr.to_pretty());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                if json_mode {
+                    println!("{}", e.to_json());
+                } else {
+                    eprintln!("{e}");
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     if multi {
         let mut results = address::parse_all_with_mode(&input, mode);
@@ -142,11 +195,15 @@ fn read_input(path: Option<&str>) -> io::Result<String> {
 }
 
 fn print_usage() {
-    eprintln!("usage: address-tool [--json] [--multi] [--zip5] [--strict|--lenient] [FILE]");
+    eprintln!("usage: address-tool [--json] [--multi] [--zip5] [--strict|--lenient] [--country us|ca] [FILE]");
     eprintln!();
-    eprintln!("Reads a US postal address (street line(s), then \"City, ST ZIP\")");
-    eprintln!("from FILE, or from stdin if FILE is omitted, validates it, and");
-    eprintln!("prints it back out in canonical form.");
+    eprintln!("Reads a postal address (street line(s), then a trailing city/region/");
+    eprintln!("postal code line) from FILE, or from stdin if FILE is omitted,");
+    eprintln!("validates it, and prints it back out in canonical form.");
+    eprintln!();
+    eprintln!("--country selects the address format: \"us\" (default) expects");
+    eprintln!("\"City, ST ZIP\"; \"ca\" expects \"City, PR A1A 1A1\". --strict/");
+    eprintln!("--lenient, --zip5, and --multi apply to US addresses only.");
     eprintln!();
     eprintln!("--strict (default) requires the exact \"City, ST ZIP\" shape.");
     eprintln!("--lenient also accepts a missing comma before the state and a");

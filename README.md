@@ -7,7 +7,8 @@ text, check that it's actually well-formed (real state code, plausible
 zip), and print it back out in a canonical shape. Either as text you'd
 put on an envelope, or as JSON if you're piping it into something else.
 
-Right now it only understands US addresses in the standard block form:
+Right now it understands two address formats: US, and Canada. US addresses
+look like this:
 
 ```
 123 Main St
@@ -148,8 +149,37 @@ so a caller can zip the output back up with whatever it fed in. Either
 way, the process exits non-zero if anything in the batch failed to
 parse.
 
+`--multi` is US-only for now.
+
+## Canadian addresses
+
+Pass `--country ca` to parse the Canadian form instead:
+
+```
+123 Main St
+Toronto, ON M5V 2T6
+```
+
+The last line must be `City, PR POSTAL CODE`, where `PR` is one of the
+13 province/territory codes and the postal code is the standard
+letter-digit-letter-digit-letter-digit shape. The internal space is
+optional on input and always added back on output:
+
+```
+$ printf '123 Main St\nToronto, ON M5V2T6\n' | ./target/release/address-tool --country ca
+123 Main St
+Toronto, ON M5V 2T6
+```
+
+`--strict`/`--lenient`, `--zip5`, and `--multi` don't apply to `--country
+ca` yet — there's no lenient recovery mode, no zip+4 concept, and no
+batch support for it. Street lines aren't suffix-normalized either,
+since the USPS Publication 28 table this tool uses for that doesn't
+apply to Canadian addresses.
+
 ## Status
 
-Early skeleton. The parser only handles the single-format US case
-described above — no international addresses yet. Zero dependencies by
+The parser handles single US addresses (with batch and lenient-mode
+support) and single Canadian addresses. Other countries, and Canadian
+`--multi`/lenient support, aren't there yet. Zero dependencies by
 design; everything here is standard library only.
