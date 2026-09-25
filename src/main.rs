@@ -7,6 +7,7 @@ mod address;
 mod international;
 
 use address::{Address, ParseError, ValidationMode};
+use international::{CaParseError, CanadianAddress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Country {
@@ -74,8 +75,17 @@ fn main() -> ExitCode {
 
     if country == Country::Ca {
         if multi {
-            eprintln!("--multi is not yet supported for --country ca");
-            return ExitCode::FAILURE;
+            let results = international::parse_all_ca(&input);
+            if results.is_empty() {
+                eprintln!("no addresses found in input");
+                return ExitCode::FAILURE;
+            }
+            let all_ok = if json_mode {
+                print_multi_json_ca(&results)
+            } else {
+                print_multi_text_ca(&results)
+            };
+            return if all_ok { ExitCode::SUCCESS } else { ExitCode::FAILURE };
         }
         return match international::parse_ca(&input) {
             Ok(addr) => {
@@ -183,6 +193,45 @@ fn print_multi_json(results: &[Result<Address, ParseError>]) -> bool {
     all_ok
 }
 
+/// Same as [`print_multi_text`], but for Canadian addresses.
+fn print_multi_text_ca(results: &[Result<CanadianAddress, CaParseError>]) -> bool {
+    let mut all_ok = true;
+    let mut printed_any = false;
+    for (i, result) in results.iter().enumerate() {
+        match result {
+            Ok(addr) => {
+                if printed_any {
+                    println!();
+                }
+                println!("{}", addr.to_pretty());
+                printed_any = true;
+            }
+            Err(e) => {
+                all_ok = false;
+                eprintln!("address {}: {e}", i + 1);
+            }
+        }
+    }
+    all_ok
+}
+
+/// Same as [`print_multi_json`], but for Canadian addresses.
+fn print_multi_json_ca(results: &[Result<CanadianAddress, CaParseError>]) -> bool {
+    let mut all_ok = true;
+    let mut items = Vec::with_capacity(results.len());
+    for result in results {
+        match result {
+            Ok(addr) => items.push(addr.to_json()),
+            Err(e) => {
+                all_ok = false;
+                items.push(e.to_json());
+            }
+        }
+    }
+    println!("[{}]", items.join(","));
+    all_ok
+}
+
 fn read_input(path: Option<&str>) -> io::Result<String> {
     match path {
         Some(p) => fs::read_to_string(p),
@@ -202,8 +251,8 @@ fn print_usage() {
     eprintln!("validates it, and prints it back out in canonical form.");
     eprintln!();
     eprintln!("--country selects the address format: \"us\" (default) expects");
-    eprintln!("\"City, ST ZIP\"; \"ca\" expects \"City, PR A1A 1A1\". --strict/");
-    eprintln!("--lenient, --zip5, and --multi apply to US addresses only.");
+    eprintln!("\"City, ST ZIP\"; \"ca\" expects \"City, PR A1A 1A1\". --multi works");
+    eprintln!("for both; --strict/--lenient and --zip5 apply to US addresses only.");
     eprintln!();
     eprintln!("--strict (default) requires the exact \"City, ST ZIP\" shape.");
     eprintln!("--lenient also accepts a missing comma before the state and a");

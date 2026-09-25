@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::address::json_string;
+use crate::address::{json_string, split_into_blocks};
 
 /// Canada's provinces and territories, by their standard two-letter
 /// Canada Post abbreviation.
@@ -93,6 +93,17 @@ pub fn parse_ca(input: &str) -> Result<CanadianAddress, CaParseError> {
         province: province_upper,
         postal_code,
     })
+}
+
+/// Parses zero or more addresses from a single input, where each address is
+/// separated from the next by one or more blank lines, same convention as
+/// the US parser's `parse_all`. One block failing to parse doesn't stop the
+/// rest — the caller gets a result per block, in input order.
+pub fn parse_all_ca(input: &str) -> Vec<Result<CanadianAddress, CaParseError>> {
+    split_into_blocks(input)
+        .into_iter()
+        .map(|block| parse_ca(&block))
+        .collect()
 }
 
 /// Splits the city/province/postal line on the last comma (same rationale
@@ -260,5 +271,29 @@ mod tests {
             addr.to_json(),
             "{\"street_lines\":[\"123 Main St\"],\"city\":\"Toronto\",\"province\":\"ON\",\"postal_code\":\"M5V 2T6\"}"
         );
+    }
+
+    #[test]
+    fn parse_all_ca_splits_on_blank_lines() {
+        let input = "123 Main St\nToronto, ON M5V 2T6\n\n1 Rue Main\nMontreal, QC H2X 1Y6";
+        let results = parse_all_ca(input);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap().city, "Toronto");
+        assert_eq!(results[1].as_ref().unwrap().city, "Montreal");
+    }
+
+    #[test]
+    fn parse_all_ca_reports_error_without_aborting_the_batch() {
+        let input = "123 Main St\nToronto, XX M5V 2T6\n\n1 Rue Main\nMontreal, QC H2X 1Y6";
+        let results = parse_all_ca(input);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], Err(CaParseError::UnknownProvince("XX".to_string())));
+        assert_eq!(results[1].as_ref().unwrap().city, "Montreal");
+    }
+
+    #[test]
+    fn parse_all_ca_empty_input_yields_no_blocks() {
+        assert_eq!(parse_all_ca("").len(), 0);
+        assert_eq!(parse_all_ca("\n\n\n").len(), 0);
     }
 }

@@ -91,8 +91,10 @@ pub fn parse_all_with_mode(input: &str, mode: ValidationMode) -> Vec<Result<Addr
 }
 
 /// Groups input lines into blocks of consecutive non-blank lines, treating
-/// one or more blank lines as a separator between addresses.
-fn split_into_blocks(input: &str) -> Vec<String> {
+/// one or more blank lines as a separator between addresses. Shared with the
+/// international parsers so every country's --multi splits input the same
+/// way.
+pub(crate) fn split_into_blocks(input: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     for line in input.lines() {
